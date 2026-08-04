@@ -545,7 +545,9 @@ Returns BLIST unchanged so `bookmark-load's contract is preserved."
 ;; When a file or directory is renamed through Emacs (dired `R',
 ;; `rename-visited-file', any Lisp call to `rename-file'), rewrite
 ;; every bookmark whose `filename' equals the renamed path, or lives
-;; under it in the directory-rename case, to the new path.
+;; under it in the directory-rename case, to the new path.  Ignore
+;; renames that create Emacs backup files: those preserve the identity
+;; of the visited file and must not relocate its bookmarks.
 ;;
 ;; Installed as `:after' advice on `rename-file'.  The OS-level
 ;; rename has already succeeded by the time we run, so the advice
@@ -561,41 +563,54 @@ Returns BLIST unchanged so `bookmark-load's contract is preserved."
 
 (defvar bmkp-non-file-filename)         ; In `bookmark+-1.el'.
 
+(defun bmkp-gt--backup-rename-p (oldname newname)
+  "Return non-nil when renaming OLDNAME to NEWNAME creates its backup.
+Recognize both simple and numbered backup names, including names
+redirected by `backup-directory-alist'."
+  (condition-case nil
+      (let ((new (expand-file-name newname)))
+        (and (backup-file-name-p new)
+             (equal (file-name-sans-versions new)
+                    (file-name-sans-versions
+                     (make-backup-file-name (expand-file-name oldname))))))
+    (error nil)))
+
 (defun bmkp-gt-on-file-rename (oldname newname &rest _)
   "Update bookmarks whose filename equals or lives under OLDNAME to NEWNAME.
 Never signals: any internal error is caught and logged.  Runs as
 `:after' advice on `rename-file'."
   (condition-case err
-      (save-match-data
-        (let* ((old      (expand-file-name oldname))
-               (new      (expand-file-name newname))
-               (old-dir  (file-name-as-directory old))
-               (new-dir  (file-name-as-directory new))
-               (dir-p    (file-directory-p new))
-               (changed  0))
-          (dolist (bm bookmark-alist)
-            (condition-case per-bm
-                (let ((f (bookmark-get-filename bm)))
-                  (when (and f
-                             (stringp f)
-                             (not (string= f bmkp-non-file-filename)))
-                    (let ((abs (expand-file-name f)))
-                      (cond
-                       ((string= abs old)
-                        (bookmark-set-filename bm new)
-                        (cl-incf changed))
-                       ((and dir-p (string-prefix-p old-dir abs))
-                        (bookmark-set-filename
-                         bm (concat new-dir (substring abs (length old-dir))))
-                        (cl-incf changed))))))
-              (error
-               (message "bmkp-gt-on-file-rename: skipped %S: %s"
-                        (car-safe bm) (error-message-string per-bm)))))
-          (when (> changed 0)
-            (setq bookmark-alist-modification-count
-                  (1+ bookmark-alist-modification-count))
-            (message "bmkp-gt: updated %d bookmark(s) after rename of %s"
-                     changed (abbreviate-file-name old)))))
+      (unless (bmkp-gt--backup-rename-p oldname newname)
+        (save-match-data
+          (let* ((old      (expand-file-name oldname))
+                 (new      (expand-file-name newname))
+                 (old-dir  (file-name-as-directory old))
+                 (new-dir  (file-name-as-directory new))
+                 (dir-p    (file-directory-p new))
+                 (changed  0))
+            (dolist (bm bookmark-alist)
+              (condition-case per-bm
+                  (let ((f (bookmark-get-filename bm)))
+                    (when (and f
+                               (stringp f)
+                               (not (string= f bmkp-non-file-filename)))
+                      (let ((abs (expand-file-name f)))
+                        (cond
+                         ((string= abs old)
+                          (bookmark-set-filename bm new)
+                          (cl-incf changed))
+                         ((and dir-p (string-prefix-p old-dir abs))
+                          (bookmark-set-filename
+                           bm (concat new-dir (substring abs (length old-dir))))
+                          (cl-incf changed))))))
+                (error
+                 (message "bmkp-gt-on-file-rename: skipped %S: %s"
+                          (car-safe bm) (error-message-string per-bm)))))
+            (when (> changed 0)
+              (setq bookmark-alist-modification-count
+                    (1+ bookmark-alist-modification-count))
+              (message "bmkp-gt: updated %d bookmark(s) after rename of %s"
+                       changed (abbreviate-file-name old))))))
     (error
      (message "bmkp-gt-on-file-rename: failed (%s)"
               (error-message-string err)))))

@@ -4,9 +4,10 @@
 ;;
 ;; Exercises the always-on `:after' advice on `rename-file' installed
 ;; by `bookmark-plus-gt.el': file rename, directory rename cascade,
-;; non-file bookmark immunity, per-record error isolation, unrelated
-;; bookmark isolation, modification-count bump, and the bulletproof
-;; contract (never signal back to the `rename-file' caller).
+;; backup-rename immunity, non-file bookmark immunity, per-record error
+;; isolation, unrelated bookmark isolation, modification-count bump,
+;; and the bulletproof contract (never signal back to the `rename-file'
+;; caller).
 
 ;;; Code:
 
@@ -58,6 +59,43 @@ Bypasses `bookmark-set' so no buffer needs to visit PATH."
       (rename-file old new)
       (should (equal (expand-file-name new)
                      (expand-file-name (bookmark-get-filename "b")))))))
+
+(ert-deftest bmkp-gt-test-rename/simple-backup-untouched ()
+  "Creating OLD~ as a backup does not relocate a bookmark for OLD."
+  (bmkp-gt-test-rename--with-env
+    (let* ((dir    (bmkp-gt-test-rename--tmpdir))
+           (old    (expand-file-name "saved.txt" dir))
+           (backup (concat old "~")))
+      (with-temp-file old (insert "before save"))
+      (bmkp-gt-test-rename--set-file-bookmark "b" old)
+      (let ((before bookmark-alist-modification-count))
+        (rename-file old backup)
+        (should (equal old (bookmark-get-filename "b")))
+        (should (= before bookmark-alist-modification-count))))))
+
+(ert-deftest bmkp-gt-test-rename/numbered-backup-untouched ()
+  "Creating OLD.~N~ as a backup does not relocate a bookmark for OLD."
+  (bmkp-gt-test-rename--with-env
+    (let* ((dir    (bmkp-gt-test-rename--tmpdir))
+           (old    (expand-file-name "saved.txt" dir))
+           (backup (concat old ".~7~")))
+      (with-temp-file old (insert "before save"))
+      (bmkp-gt-test-rename--set-file-bookmark "b" old)
+      (let ((before bookmark-alist-modification-count))
+        (rename-file old backup)
+        (should (equal old (bookmark-get-filename "b")))
+        (should (= before bookmark-alist-modification-count))))))
+
+(ert-deftest bmkp-gt-test-rename/unrelated-backup-looking-name-updated ()
+  "A rename to an unrelated tilde name is not mistaken for OLD's backup."
+  (bmkp-gt-test-rename--with-env
+    (let* ((dir (bmkp-gt-test-rename--tmpdir))
+           (old (expand-file-name "old.txt" dir))
+           (new (expand-file-name "different.txt~" dir)))
+      (with-temp-file old (insert "hi"))
+      (bmkp-gt-test-rename--set-file-bookmark "b" old)
+      (rename-file old new)
+      (should (equal new (bookmark-get-filename "b"))))))
 
 (ert-deftest bmkp-gt-test-rename/directory-cascades-to-children ()
   "Renaming a directory rewrites every bookmark whose file lives under it."
